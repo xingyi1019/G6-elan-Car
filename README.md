@@ -85,7 +85,18 @@ evil_elan_ccar/
 └── RViz/VLS128.rviz       ← 光達顯示設定
 ```
 
-> **路徑提醒**：`ros_start.sh` 目前引用固定路徑 `~/Desktop/can2topic.launch`、`~/Desktop/VLS128.rviz`、`~/Desktop/Car/cme_cv2_*.py`。若你的資料夾位置不同，請把腳本內這幾行路徑改成實際位置（或把這些檔案放到 `~/Desktop`）。
+> **⚠️ 部署位置很重要（腳本用寫死的絕對路徑）**
+>
+> 本 repo 只是整齊的備份；`ros_start.sh` 內部固定呼叫 `~/Desktop/...` 路徑，與本 repo 的資料夾分類**不一樣**。實際跑車時，請把檔案放到下表位置，腳本才找得到（`~` = 家目錄）：
+>
+> | repo 內位置 | 車上要放到 |
+> |---|---|
+> | `shell/*.sh`、`camera/cme_cv2_*.py` | **`~/Desktop/Car/`**（在此執行 `./ros_start.sh`） |
+> | `ros_launch/can2topic.launch` | **`~/Desktop/`**（注意：**不是** Car/） |
+> | `RViz/VLS128.rviz` | **`~/Desktop/`**（注意：**不是** Car/） |
+> | `parser/g6sensorparserV9.py` | 放與 `.bag` 同一資料夾即可 |
+>
+> 若不想遷就這些固定路徑，可把 `ros_start.sh` 內 4 處 `~/Desktop/...`（第 16、21、22、24 行）改成你的實際位置。
 
 ---
 
