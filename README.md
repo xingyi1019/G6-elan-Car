@@ -212,16 +212,18 @@ python3 parser/g6sensorparserV9.py <bag 資料夾>
 
 ```
 <日期>/<情境>/<bag 檔名>/
-├── images/{main,left,right,rear,sideL,sideR}/{i:06d}.png   ← 各路相機「全部」影像
-├── VLS128_pcd/{i:06d}.pcd                                   ← 光達點雲
-├── gps/{i:06d}.txt        imu/imu_data.txt        can/can_raw.txt
-├── timestamps/            ← pair_timestamps.txt、pointcloud_timestamps.txt
-└── paired/                ← 依光達幀對齊之「配對結果」（訓練/投影用這個）
-    ├── images/{main,left,right,rear,sideL,sideR}/{i:06d}.png
-    └── imu/{i:06d}.txt
+├── images/{main,left,right,rear,sideL,sideR}/000000.png、000001.png …   ← 各路相機「全部」影像
+├── VLS128_pcd/000000.pcd、000001.pcd …                                   ← 光達點雲
+├── gps/000000.txt …        imu/imu_data.txt        can/can_raw.txt
+├── timestamps/             ← pair_timestamps.txt、pointcloud_timestamps.txt
+└── paired/                 ← 依光達幀對齊之「配對結果」（訓練/投影用這個）
+    ├── images/{main,left,right,rear,sideL,sideR}/000000.png …
+    └── imu/000000.txt …
 ```
 
-> 另會在**輸入資料夾**產生 `combined_gps_routes.html`（GPS 路線圖）。`images/` 是抽出的所有影像；`paired/images/` 才是與光達逐幀對齊後的配對影像。
+> - 檔名是 **6 位數補零的流水號**（`000000`、`000001`、`000002`…）；**同一編號 = 同一幀**（例：`paired/images/main/000005.png` 對應 `VLS128_pcd/000005.pcd`）。
+> - `images/` 是抽出的**所有**影像；`paired/images/` 才是與光達**逐幀對齊**後的配對影像（訓練/投影用這個）。
+> - 另會在**輸入資料夾**產生 `combined_gps_routes.html`（GPS 路線圖）。
 
 > G6 解析採「OSD 純時戳配對」：**移除人工平移湊數邏輯**，改用帶精準 OSD 曝光時間的影像時間軸，嚴格 ≤ 33 ms 物理時差限制。
 
