@@ -202,19 +202,26 @@ RTSP 網路相機影像在被標記時戳前已延遲數百毫秒，故需三層
 ## 八、資料解析（rosbag → paired）
 
 ```bash
-# 放在與 .bag 同一資料夾內執行
-python3 parser/g6sensorparserV9.py
+# 單一 bag：
+python3 parser/g6sensorparserV9.py <路徑>/xxx.bag
+# 或整個資料夾（會處理裡面所有 *.bag）：
+python3 parser/g6sensorparserV9.py <bag 資料夾>
 ```
 
-依 bag 內各 topic 時戳對齊後輸出 **paired 格式**（每個光達幀配好對應影像）：
+解析後於 `<日期>/<情境>/<bag 檔名>/` 下輸出：先抽出各 topic 原始資料，再依**光達幀時戳**對齊產生獨立的 `paired/`（每個光達幀配好對應的六路影像與 IMU）：
 
 ```
-<session>/
-├── images/{main,left,right,rear,sideL,sideR}/{i:06d}.png
-├── VLS128_pcd/{i:06d}.pcd
-├── imu/  gps/  can/
-└── timestamps/
+<日期>/<情境>/<bag 檔名>/
+├── images/{main,left,right,rear,sideL,sideR}/{i:06d}.png   ← 各路相機「全部」影像
+├── VLS128_pcd/{i:06d}.pcd                                   ← 光達點雲
+├── gps/{i:06d}.txt        imu/imu_data.txt        can/can_raw.txt
+├── timestamps/            ← pair_timestamps.txt、pointcloud_timestamps.txt
+└── paired/                ← 依光達幀對齊之「配對結果」（訓練/投影用這個）
+    ├── images/{main,left,right,rear,sideL,sideR}/{i:06d}.png
+    └── imu/{i:06d}.txt
 ```
+
+> 另會在**輸入資料夾**產生 `combined_gps_routes.html`（GPS 路線圖）。`images/` 是抽出的所有影像；`paired/images/` 才是與光達逐幀對齊後的配對影像。
 
 > G6 解析採「OSD 純時戳配對」：**移除人工平移湊數邏輯**，改用帶精準 OSD 曝光時間的影像時間軸，嚴格 ≤ 33 ms 物理時差限制。
 
