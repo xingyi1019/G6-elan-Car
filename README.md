@@ -1,10 +1,4 @@
-# evil_elan_ccar — G6 實驗車資料蒐集與交接手冊
-
-> 交接自 **陳新義**（NTUT 資工碩，指導教授陳彥霖）。本 repo 為 **G6 多模態實驗車車上端（car-side）資料蒐集流程**，涵蓋感測器啟動、時間同步、rosbag 錄製與離線解析。
->
-> **目前交接狀態**：與前一代 G5 相同，核心產出為**感測器 rosbag**（光達 + IMU + 六路相機 + CAN + GPS）。舊有已解析資料未一併移交，請依本流程重新蒐集。完整方法論見碩論《異質感測器資料蒐集與時空校正框架：以台灣複雜交通場景為例》第三章。
-
----
+# G6 實驗車資料蒐集與交接手冊
 
 ## 目錄
 
@@ -33,14 +27,22 @@
 | GPS | NMEA USB（約 10 Hz） | `/dev/ttyUSB0` |
 | CAN 匯流排 | Kvaser 4×HS，bitrate 500000 | `can0`/`can1`/`can2` |
 
-> 感測器架每次出車重裝，**外參需逐日校正**（基準外參＋當日投影對齊人工微調，見碩論 3.5 節）。
+> 感測器架每次出車重裝，**外參需逐日校正**（以基準外參為起點，再依當日投影對齊人工微調）。
 
 ---
 
 ## 二、開發環境與需安裝套件
 
-- **作業系統**：Ubuntu 20.04　**ROS**：Noetic
-- **兩個 catkin workspace**：`~/catkin_ws`（光達/IMU/CAN/相機）、`~/gps_ws`（GPS）
+### 系統
+
+| 項目 | 版本 | 下載 / 安裝說明 |
+|---|---|---|
+| 作業系統 | Ubuntu 20.04 (Focal) | https://releases.ubuntu.com/focal/ |
+| ROS | Noetic | https://wiki.ros.org/noetic/Installation/Ubuntu |
+
+### 兩個 catkin workspace
+
+`~/catkin_ws`（光達 / IMU / CAN / 相機）、`~/gps_ws`（GPS）
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -50,15 +52,15 @@ source ~/gps_ws/devel/setup.bash
 
 ### 需安裝的 ROS 套件（新機器接手第一步）
 
-| 用途 | 套件 | 安裝 |
+| 用途 | 套件 | 安裝 / 下載位置 |
 |---|---|---|
-| 光達 VLS-128 | `velodyne`（velodyne_pointcloud） | `sudo apt install ros-noetic-velodyne` |
-| IMU | `razor_imu_9dof` | 由原始碼 clone 進 `~/catkin_ws/src` → `catkin_make`（apt 無 noetic 版） |
-| GPS | `nmea_navsat_driver` | `sudo apt install ros-noetic-nmea-navsat-driver` |
-| CAN → topic | SocketCAN + `ros_launch/can2topic.launch` | `sudo apt install can-utils`；launch 檔在本 repo |
+| 光達 VLS-128 | `velodyne`（velodyne_pointcloud） | `sudo apt install ros-noetic-velodyne`　或原始碼：https://github.com/ros-drivers/velodyne |
+| IMU | `razor_imu_9dof` | clone 進 `~/catkin_ws/src` → `catkin_make`：https://github.com/ENSTABretagneRobotics/razor_imu_9dof （indigo-devel 分支，本車用 `razor-pub.launch`） |
+| GPS | `nmea_navsat_driver` | `sudo apt install ros-noetic-nmea-navsat-driver`　或原始碼：https://github.com/ros-drivers/nmea_navsat_driver |
+| CAN → topic | `socketcan_bridge` | `sudo apt install ros-noetic-socketcan-bridge`（`ros_launch/can2topic.launch` 用此節點；launch 檔在本 repo） |
 | 影像壓縮 | `cv_bridge`、`image_transport` | `sudo apt install ros-noetic-cv-bridge ros-noetic-image-transport` |
 
-其他相依：Python3 `opencv-python numpy rosbag`、系統 `ffmpeg`（含 NVDEC 硬解 `h264_cuvid`）、`chrony`、`sshpass`、`can-utils`（`cansend`/`candump`）。
+其他相依：Python3 `opencv-python numpy rosbag`、系統 `ffmpeg`（含 NVDEC 硬解 `h264_cuvid`）、`chrony`、`sshpass`、`can-utils`（`cansend`／`candump`，驗證 CAN 用）。
 
 ---
 
@@ -137,7 +139,7 @@ evil_elan_ccar/
 | 光達 | velodyne_pointcloud | `/velodyne_points` |
 | IMU | razor_imu_9dof | `/imu` |
 | GPS | nmea_navsat_driver | `/fix` |
-| CAN／雷達 | SocketCAN（can2topic） | `/can0/received_msg`、`/can1/received_msg`、`/can2/received_msg` |
+| CAN／雷達 | socketcan_bridge（can2topic） | `/can0/received_msg`、`/can1/received_msg`、`/can2/received_msg` |
 | 主相機 | cme_cv2_maincam.py | `/cme_cam/main/compressed`、**`/cme_cam/main/osd`** |
 | 側方五路 | cme_cv2_sidecam.py | `/cme_cam/{left,right,rear,sideL,sideR}/compressed` |
 
@@ -147,7 +149,7 @@ evil_elan_ccar/
 
 ## 七、時間同步機制（重要）
 
-RTSP 網路相機影像在被標記時戳前已延遲數百毫秒，故需三層同步（碩論 3.4 節）：
+RTSP 網路相機影像在被標記時戳前已延遲數百毫秒，故需三層同步：
 
 1. **Chrony**：主機對時，同時作為內網主時鐘。`chrony.conf` 須有 `allow 192.168.100.0/24`、`allow 192.168.1.0/24`，並設 `local stratum` 作斷網備援。查：`chronyc tracking`。
 2. **相機/光達對時**：光達走 CGI 設 NTP、側相機走 SSH、主相機走 telnet `ntpd` 常駐（`sync_camera_time.sh` 全包）。
@@ -195,12 +197,8 @@ python3 parser/g6sensorparserV9.py
 
 ## 十、交接注意事項
 
-- **外參逐日校正**：每次出車感測器架重裝，需以棋盤格取基準外參、再依當日投影對齊人工微調（碩論 3.5 節）。
+- **外參逐日校正**：每次出車感測器架重裝，需以棋盤格取基準外參、再依當日投影對齊人工微調。
 - **rosbag 很大**：單段原始約 6 GB，解析標準化後約 500 MB；錄前確認硬碟空間。
 - **相機成像模型**：main／left／right／rear 用 Kannala–Brandt（廣角／魚眼）、sideL／sideR 用 Brown–Conrady（針孔）。
 - **雷達目前只錄不解**：ARS408 raw CAN 已保留，結構化解碼與融合列為未來工作。
-- **相依論文章節**：時間同步＝3.4；空間校正＝3.5；資料格式與品質篩選＝3.7。
-
----
-
-*本手冊由陳新義整理交接。細節請對照碩論第三章。*
+- **密碼**：`shell/ros_start.sh`、`shell/sync_camera_time.sh` 內標示「填上你的密碼」處，請填入實際密碼（另行取得）。
