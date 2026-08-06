@@ -98,6 +98,35 @@ evil_elan_ccar/
 >
 > 若不想遷就這些固定路徑，可把 `ros_start.sh` 內 4 處 `~/Desktop/...`（第 16、21、22、24 行）改成你的實際位置。
 
+### 部署步驟（第一次在筆電/車機設定，仿學長流程）
+
+```bash
+# 1. 建立工作區資料夾
+mkdir -p ~/Desktop/Car
+
+# 2. clone 本 repo
+git clone https://github.com/xingyi1019/G6-elan-Car.git
+
+# 3. 安裝 ROS 套件（見第二節），放進對應 workspace 後 catkin_make
+#    velodyne / razor_imu_9dof / socketcan_bridge → ~/catkin_ws/src
+#    nmea_navsat_driver                            → ~/gps_ws/src
+
+# 4. 依上表放檔案：
+#    ~/Desktop/       ← can2topic.launch、VLS128.rviz
+#    ~/Desktop/Car/   ← shell/*.sh、camera/cme_cv2_*.py
+```
+
+**完整檔案位置一覽**
+
+```
+~/catkin_ws/src/     ← velodyne、razor_imu_9dof、socketcan_bridge（第二節裝的 ROS 套件）
+~/gps_ws/src/        ← nmea_navsat_driver
+~/Desktop/Car/       ← 本 repo 的 shell/*.sh、camera/cme_cv2_*.py（在此執行 ./ros_start.sh）
+~/Desktop/           ← can2topic.launch、VLS128.rviz
+```
+
+> ROS 套件（velodyne、razor、socketcan_bridge、nmea）本身**不放進 repo**，依第二節安裝即可——repo 只存自製腳本（與學長交接方式一致）。
+
 ---
 
 ## 四、出車 SOP（每次照順序做）
