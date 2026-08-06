@@ -138,16 +138,16 @@ git clone https://github.com/xingyi1019/G6-elan-Car.git
    ```bash
    ./shell/setup_radar.sh
    ```
-3. **啟動所有 ROS 節點**：
-   ```bash
-   ./shell/ros_start.sh
-   ```
-   啟動後**逐一檢查每個 gnome-terminal tab 沒有紅字**（roscore / can / imu / main_cam / side_cams / VLS128 / gps）。
-4. **時間同步**（關鍵）：
+3. **時間同步**（關鍵，先對時再啟動節點）：
    ```bash
    ./shell/sync_camera_time.sh
    ```
    確認：Chrony Stratum 正常、5 路側相機「✅ 已同步」、主相機「✅ ntpd 已啟動」。
+4. **啟動所有 ROS 節點**：
+   ```bash
+   ./shell/ros_start.sh
+   ```
+   啟動後**逐一檢查每個 gnome-terminal tab 沒有紅字**（roscore / can / imu / main_cam / side_cams / VLS128 / gps）。
 5. **錄製**：
    ```bash
    ./shell/record_time.sh
