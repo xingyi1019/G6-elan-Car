@@ -12,6 +12,7 @@
 8. [資料解析（rosbag → paired）](#八資料解析rosbag--paired)
 9. [疑難排解](#九疑難排解)
 10. [交接注意事項](#十交接注意事項)
+11. [常用指令速查](#十一常用指令速查cheat-sheet)
 
 ---
 
@@ -251,3 +252,86 @@ python3 parser/g6sensorparserV9.py <bag 資料夾>
 - **相機成像模型**：main／left／right／rear 用 Kannala–Brandt（廣角／魚眼）、sideL／sideR 用 Brown–Conrady（針孔）。
 - **雷達目前只錄不解**：ARS408 raw CAN 已保留，結構化解碼與融合列為未來工作。
 - **密碼**：`shell/ros_start.sh`、`shell/sync_camera_time.sh` 內標示「填上你的密碼」處，請填入實際密碼（另行取得）。
+
+---
+
+## 十一、常用指令速查（cheat sheet）
+
+> 出車現場最常用的指令,依你們實際的 IP／裝置／topic 寫好。
+
+### 裝置檢查（接線後先確認硬體有被認到）
+```bash
+ls /dev/tty*              # 看所有序列埠
+ls /dev/ttyACM* /dev/ttyUSB*   # IMU=ttyACM0、GPS=ttyUSB0
+dmesg | tail -20         # 剛插的裝置有沒有被認到(拔插後看)
+lsusb                    # 列 USB 裝置
+ip link show             # 看網卡與 CAN 介面(can0/can1/can2)
+ip addr                  # 看本機各網段 IP(相機 192.168.100.x、光達 192.168.1.x)
+```
+
+### 序列埠權限（IMU/GPS 打不開時）
+```bash
+sudo chmod a+rw /dev/ttyACM0   # IMU
+sudo chmod a+rw /dev/ttyUSB0   # GPS
+```
+
+### 網路 / 感測器連線（ping 得到才代表接上了）
+```bash
+ping 192.168.1.201       # 光達 VLS-128
+ping 192.168.100.26      # 主相機
+ping 192.168.100.2       # 側相機(其餘 .3 .4 .5 .6)
+chronyc tracking         # 時間同步狀態(看 Stratum、offset)
+chronyc sources          # 對時來源
+```
+
+### CAN / 雷達
+```bash
+ip -details link show can0     # 看 can0 狀態與 bitrate(500000)
+candump can0                   # 即時看 CAN 封包(雷達有沒有在送)
+candump can0 | head            # 看幾筆就好
+cansend can0 200#1800000010040000   # 手動送 ARS408 啟動封包
+```
+
+### ROS 基本
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/catkin_ws/devel/setup.bash
+roscore                        # 啟動 ROS master
+rostopic list                  # 列出所有 topic(確認感測器都上來了)
+rosnode list                   # 列出所有節點
+rostopic hz /velodyne_points   # 看光達更新率(~10Hz)
+rostopic hz /cme_cam/main/compressed   # 看主相機 FPS(~30)
+rostopic echo -n1 /fix         # 看一筆 GPS
+rostopic echo -n1 /imu         # 看一筆 IMU
+rostopic echo -n1 /cme_cam/main/osd    # 看主相機 OSD 時戳
+rqt_graph                      # 視覺化節點/topic 連線圖
+```
+
+### rosbag
+```bash
+rosbag info xxx.bag            # 看 bag 內容(topic、時長、訊息數、大小)★最常用
+rosbag record -O out /velodyne_points /imu /fix   # 手動錄指定 topic
+rosbag record -a               # 錄全部 topic
+rosbag play xxx.bag            # 播放
+rosbag play -r 0.5 xxx.bag     # 半速播放
+```
+
+### 系統 / 硬碟（錄 bag 前必看）
+```bash
+df -h                    # 硬碟剩多少空間(rosbag 很大!)
+du -sh *                 # 目前資料夾各項大小
+du -sh bag_record/       # 已錄多少
+nvidia-smi               # GPU 狀態(4K 相機硬解用)
+htop                     # CPU / 記憶體(相機 latency 飆高時看)
+```
+
+### 常用切換 / 執行
+```bash
+cd ~/Desktop/Car                 # 進工作區
+cd ~/Desktop/Car/bag_record/$(date +%F)   # 進今天的錄製資料夾
+./shell/setup_radar.sh           # 1. 啟動雷達 CAN
+./shell/sync_camera_time.sh      # 2. 對時
+./shell/ros_start.sh             # 3. 啟動所有節點
+./shell/record_time.sh           # 4. 錄製
+python3 parser/g6sensorparserV9.py <bag>   # 5. 離線解析
+```
