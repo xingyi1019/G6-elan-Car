@@ -1,188 +1,266 @@
-# G6 光達–相機 校正(內參 / 外參 / 投影驗證)
+# G6 光達–相機 校正教學
 
-這個資料夾是 G6 實驗車「光達 ↔ 相機」時空校正的核心程式。
-輸入是**已配對好的影像 + 點雲**,輸出是**每台相機的內參(K, D)與外參(T)**,
-最後可以把光達點雲**投影疊回影像**用眼睛驗證對得準不準。
+這份教學帶你把 G6 實驗車的**相機內參**校好,再用**互動工具手動對齊外參**,
+最後把光達點雲投影疊回影像、用眼睛確認對得準不準。
 
-> 只放校正核心,不含論文畫圖 / 統計實驗腳本。
+> 從零開始寫,不預設你看過這些程式。照著章節順序做就好。
 
 ---
 
-## 0. 資料格式(重要)
+## 先搞懂:校正到底在做什麼(白話)
 
-所有腳本都假設「一個場景資料夾」長這樣(paired 格式,檔名對檔名):
+把光達的點「畫到」相機照片上,需要兩組參數:
+
+| 名稱 | 白話 | 內容 |
+|---|---|---|
+| **內參**(K, D) | 相機**鏡頭自己**的特性 | 焦距、光心、畸變(把魚眼那種彎的還原成直的) |
+| **外參**(T) | 光達 ↔ 相機的**相對位置姿態** | 一個 4×4 矩陣:光達座標系 → 相機座標系 |
+
+流程:
+```
+光達 3D 點 --(外參 T)--> 相機座標 --(內參 K,D)--> 影像上的像素 (u,v)
+```
+把每個點都這樣算出 (u,v) 畫上去,**疊得準 = 校正好**。
+所以要先有**內參**,再調**外參**,最後**投影**檢查。
+
+---
+
+## 0. 資料格式(所有腳本都吃這個格式)
+
+一個「場景資料夾」長這樣,**影像跟點雲用同一個編號對檔**:
 
 ```
 <場景資料夾>/
 ├── images/
 │   ├── main/     000000.png 000001.png ...   # 主相機(廣角)
-│   ├── left/     000000.png ...              # 環景魚眼 左
-│   ├── right/    ...                          # 環景魚眼 右
-│   ├── rear/     ...                          # 環景魚眼 後
-│   ├── sideL/    ...                          # 側方針孔 左
-│   └── sideR/    ...                          # 側方針孔 右
+│   ├── left/  right/  rear/                   # 環景魚眼三路
+│   └── sideL/ sideR/                          # 側方針孔兩路
 └── VLS128_pcd/   000000.pcd 000001.pcd ...    # VLS-128 光達
 ```
-
-**規則:同一個 frame 的影像跟點雲用同一個編號**(`images/main/000012.png` ↔ `VLS128_pcd/000012.pcd`)。
-`read_pcd()` 同時支援 ascii 與 binary 的 .pcd。
+`images/main/000012.png` ↔ `VLS128_pcd/000012.pcd` 是同一個 frame。
 
 ---
 
-## 1. 環境
+## 1. 環境(先裝好)
 
 ```bash
 pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
-# 投影影片需要 ffmpeg(batch_project.py 用)
 ```
-
-⚠️ 一定要 **opencv-contrib-python**(不是純 opencv-python),因為魚眼校正用到 `cv2.fisheye.*`。
-`PyQt5` 只有互動式微調 GUI(`tuner/`)才需要,純腳本流程不用。
+- ⚠️ 一定要 **opencv-contrib-python**(不是 opencv-python),魚眼校正要用 `cv2.fisheye.*`。
+- `PyQt5` 只有外參微調 GUI 要用。
+- 投影出影片要另外裝 **ffmpeg**。
 
 ---
 
-## 2. 三階段流程
+# 內參校正教學(魚眼 / 廣角相機)
 
-```
-(1) 內參 intrinsic/   →  拍棋盤格 → 算每台相機的 K, D
-(2) 外參 extrinsic/   →  光達+相機同時看棋盤/場景 → 算 T(光達→相機)
-(3) 投影 projection/  →  把點雲投影疊回影像 → 眼睛驗證
-```
+主相機(廣角)、left/right/rear(魚眼)這四路,用下面的流程。
+針孔的 sideL/sideR 見 [§2.5](#25-針孔相機-sidelsider)。
 
-把算出來的 K / D / T 填進 `config/`,投影腳本就會讀來用。
+## 事前:拍棋盤格
 
----
+拿一張**棋盤格標定板**,用要校正的那台相機,**從不同角度、距離、畫面不同位置**各拍幾十張,
+存成一個資料夾(png)。棋盤要拍**完整、清楚、不晃**,盡量佈滿畫面各處(中間、四角都要有)。
 
-## 3. 內參 `intrinsic/`
-
-| 腳本 | 做什麼 |
-|---|---|
-| `detect_grid.py` | 前置診斷:試各種棋盤內角點尺寸,回報每種抓到幾張。**先跑這個確認棋盤尺寸。** |
-| `calib_fisheye_final.py` | 魚眼/廣角內參校正(最終版):bootstrap 偵測 + 逐張剔高誤差,盡量保留最多張。輸出 K_base、D、RMS。 |
-| `verify_undistort.py` | 拿新內參對一張圖去畸變,並排「原圖 vs 去畸變」看直線有沒有拉直。 |
-
-**用法**(這三支的資料夾路徑是**寫死在檔案開頭**,要自己改):
-```python
-# 打開檔案,改最上面這行成你的棋盤照片資料夾
-IMG_DIR = r"E:\Car\calibration_data_rear\png"
-```
-```bash
-python intrinsic/detect_grid.py            # 先確認棋盤尺寸 (預設 9x6)
-python intrinsic/calib_fisheye_final.py    # 算內參,終端會印出 K_base / D / RMS
-python intrinsic/verify_undistort.py       # 視覺驗證
-```
-> 針孔相機(sideL/sideR)的內參用 OpenCV 標準 `cv2.calibrateCamera` 流程即可;
-> 這裡附的是比較麻煩的魚眼/廣角版本(`cv2.fisheye`)。
+> 「內角點」= 棋盤上黑白格**交界的內部交叉點**,不是格子數。
+> 例如 10×7 格的板子,內角點是 **9×6**。
 
 ---
 
-## 4. 外參 `extrinsic/`
+## 2.1　Step 1:確認棋盤尺寸 — `intrinsic/detect_grid.py`
 
-| 腳本 | 方法 | 何時用 |
+先確認你的板子在程式眼裡是幾乘幾。
+
+1. 打開 `intrinsic/detect_grid.py`,改**最上面這行**成你的照片資料夾:
+   ```python
+   IMG_DIR = r"E:\Car\calibration_data_rear\png"   # ← 改成你的棋盤照片資料夾
+   ```
+2. 跑:
+   ```bash
+   python intrinsic/detect_grid.py
+   ```
+3. 它會試各種尺寸,印出每種抓到幾張,例如:
+   ```
+     (9, 6): 42/50 張抓到
+     ...
+   ✅ 最佳尺寸: (9, 6)  (42/50 張)
+   ```
+   **記住這個最佳尺寸**(通常就是 `(9, 6)`),下一步要用。
+
+---
+
+## 2.2　Step 2:算內參 — `intrinsic/calib_fisheye_final.py`
+
+1. 打開 `intrinsic/calib_fisheye_final.py`,改開頭兩個地方:
+   ```python
+   IMG_DIR = r"E:\Car\calibration_data_rear\png"   # ← 同一個照片資料夾
+   CB = (9, 6)                                      # ← 改成 Step 1 的最佳尺寸
+   ```
+2. 跑:
+   ```bash
+   python intrinsic/calib_fisheye_final.py
+   ```
+3. 它會自動偵測棋盤、逐張剔掉誤差太大的爛圖,最後印出結果:
+   ```
+   ============================================================
+     rear 魚眼內參 (用 38 張, RMS=0.42px)
+   ============================================================
+   # K_base @ 1280x1024
+   K_base = [263.375786, 263.820321, 640.000000, 512.000000]
+
+   # D [k1,k2,k3,k4]
+   D = [0.42750887, -0.14506998, 0.02445243, -0.00135651]
+   ```
+
+**怎麼看結果:**
+| 項目 | 意思 | 好壞判斷 |
 |---|---|---|
-| `auto_extrinsic.py` | **有棋盤板**:自動掃含棋盤的 frame → 影像端偵測角點、點雲端 RANSAC 找棋盤平面 → `solvePnP` 解 T | 有拿棋盤板對著車拍的資料 |
-| `targetless_refine.py` | **無棋盤板**:影像 Canny 邊緣做距離變換,點雲取深度不連續點,投影後做邊緣相關,`scipy.optimize` 微調 T | 已有初始 T,想用自然場景邊緣再精修 |
-| `extrinsic_check.py` | 拿內參 + 外參把校正板資料投影疊圖,肉眼看對齊 | 驗證外參 |
+| **RMS** | 重投影誤差(像素) | **越小越好**,`< 1px` 算很好,`> 2px` 要檢查照片品質 |
+| **K_base** | `[fx, fy, cx, cy]` = 焦距 x/y、光心 x/y | — |
+| **D** | 魚眼畸變係數 `[k1,k2,k3,k4]` | — |
 
-**用法**:
-```bash
-# 有棋盤板 → 自動解外參(可多場景一起)
-python extrinsic/auto_extrinsic.py \
-    --scenarios <場景1> <場景2> \
-    --cams sideL sideR left right \
-    --out-dir ./ext_results
-# 產出 extrinsic_summary.json,內含每台相機的 best_T / median_T / RMS
-
-# 無棋盤板 → 從 config 初始 T 邊緣相關精修
-python extrinsic/targetless_refine.py \
-    --scenarios <場景1> <場景2> \
-    --cam sideL \
-    --out refined_sideL.json
-```
-> `auto_extrinsic.py` 內參是**寫死**的(BSD 針孔 fx≈2023、魚眼 K_base),要改就改檔案上方常數。
-> `extrinsic_check.py` 的 `IMG_DIR/PCD_DIR/K/T` 也寫死在開頭,自己改。
-> 棋盤格參數在 `auto_extrinsic.py` 開頭:`CHECKERBOARD=(9,6)`、`SQUARE_SIZE_M=0.108`(每格 10.8cm),依你的板子改。
+> ⚠️ 檔案裡的 `K0`/`D0`(bootstrap 起點)是針對某台相機調的初始猜值。
+> 換相機如果一直發散,把 `K0` 的 `cx,cy` 改成你影像的**一半**(影像寬/2、高/2)再試。
 
 ---
 
-## 5. 投影驗證 `projection/`
+## 2.3　Step 3:驗證有沒有校對 — `intrinsic/verify_undistort.py`
 
-把點雲投影回影像、依深度上色、串成影片,用來**眼見為憑**確認校正對不對。
+用剛算的內參把一張棋盤圖**去畸變**,看原本彎的線有沒有被拉直。
 
-| 腳本 | 做什麼 |
-|---|---|
-| `batch_project.py` | 通用六路投影:讀 `config/config_g6_6view.json` → 逐 frame 疊圖 → ffmpeg 串 mp4。**主力工具。** |
-| `main_only_projector.py` | 只跑主相機(原解析度),直接輸出 mp4。 |
+1. 打開 `intrinsic/verify_undistort.py`,把 `K`、`D` 換成 Step 2 算出來的值,
+   `img` 改成一張你的棋盤照片路徑。
+2. 跑:
+   ```bash
+   python intrinsic/verify_undistort.py
+   ```
+3. 會存一張「**原圖 vs 去畸變**」並排圖。**去畸變那邊的直線(棋盤邊、牆角)有變直 = 內參 OK。**
 
-**用法**(這兩支路徑是 **argparse 參數**,不用改檔案):
+---
+
+## 2.4　Step 4:把內參填回 config
+
+打開 `config/config_g6_6view.json`,找到對應相機(例 `'rear'`),把值填進去:
+
+```python
+'rear': {
+    'type': 'fisheye',
+    'scale': 1.0,
+    'K': np.array([                       # ← 用 K_base 組成 3×3
+        [263.375786,   0.0,        640.0],   #   [fx, 0,  cx]
+        [  0.0,      263.820321,   512.0],   #   [0,  fy, cy]
+        [  0.0,        0.0,          1.0],
+    ], dtype=np.float32),
+    'D': np.array([0.42750887, -0.14506998, 0.02445243, -0.00135651, 0.0], dtype=np.float32),
+    'T': np.array([ ... ]),               # ← 外參,下一階段調
+}
+```
+內參到這就好了。**T(外參)先不用管,下一階段用工具調。**
+
+---
+
+## 2.5　針孔相機 sideL / sideR
+
+側方兩路是**針孔**,不用魚眼流程。用 OpenCV 標準的 `cv2.calibrateCamera`
+(棋盤偵測 → calibrateCamera → 得到 `K` 3×3 與 `D` 5 個係數 `[k1,k2,p1,p2,k3]`)。
+這裡沒附針孔腳本,網路上 OpenCV 官方 camera calibration 教學即是標準做法;
+算完一樣把 `K`、`D` 填回 config 的 `'sideL'`/`'sideR'`(`'type': 'pinhole'`)。
+
+---
+
+# 外參校正
+
+> 🚧 **外參詳細教學待補**。目前先用下面的互動工具**手動對齊**。
+
+## 3. 用 `tuner/alignment_tool.py` 手動調外參(主要方式)
+
+出車後感測器架每次重裝,外參都會跑掉。實務做法就是**開這支 GUI,一邊看投影一邊拉 slider 對齊**,對好按 Save 存回 config。
+
+**開啟:**
 ```bash
-# 六路(或指定某幾路)投影 + 出影片
+python tuner/alignment_tool.py
+```
+
+**畫面:**
+- **左邊**:光達點雲即時投影疊在相機影像上(滾輪縮放、左鍵拖移、雙擊還原)
+- **右邊 slider**:調**外參** tx/ty/tz(公尺)、roll/pitch/yaw(度);也能微調內參/畸變
+- **上方**:選 Data Root、切場景 session、切相機、前後翻 frame
+
+**操作大概:**
+1. 上方 **Data Root** 選你的 data 根目錄(預設找 `alignment_tool.py` 同層的 `data/`)。
+2. 選 **Camera**(main/left/right/rear/sideL/sideR),它會自動載入 config 裡該相機的 K/D/T。
+3. 拉右邊 **Extrinsic** 的 slider(先調 yaw/pitch/roll 對角度,再調 tx/ty/tz 對位置),
+   讓點雲的輪廓**貼齊**影像上物體邊緣(電線桿、車、號誌)。
+4. 對好按 **Save Config** → 寫回 `config_g6_6view.json`。按錯了按 **還原參數** 撤銷。
+
+> 🚧 **逐格對齊的細節技巧(先調哪軸、看什麼判斷對齊)教學待補**,之後補。
+
+## 4.（進階,選用)自動外參腳本
+
+`extrinsic/` 裡另有幾支**自動**求外參的腳本(有棋盤板 PnP、無板邊緣相關精修)。
+🚧 **這部分教學待補**,先不用;需要時再看檔案內的說明註解。
+
+---
+
+# 投影驗證(確認校正對不對)
+
+內參 + 外參都填進 config 後,把整段場景投影出來、串成影片,肉眼確認。
+
+## 5.1　六路(或指定幾路)批次投影 — `projection/batch_project.py`
+```bash
 python projection/batch_project.py \
     --data-root <data 根目錄> \
     --config    config/config_g6_6view.json \
     --scenario  <場景資料夾名稱> \
     --cams      main,left,right \
     --fps 10
+```
+每台相機會輸出疊合圖 + 一支 mp4 影片。
 
-# 只跑主相機
+## 5.2　只跑主相機 — `projection/main_only_projector.py`
+```bash
 python projection/main_only_projector.py \
     --scenario-dir <場景資料夾> \
     --config config/config_g6_6view.json \
     --out    ./main_projected.mp4
 ```
 
+**看影片:光達點雲的輪廓貼齊影像上的物體 = 校正成功。**
+
 ---
 
-## 6. `config/` 校正參數
+## 附錄:`config/` 說明
 
-同一組 K / D / T,兩種格式並存:
+同一組 K/D/T,兩種格式並存:
 
 | 檔案 | 格式 | 誰在用 |
 |---|---|---|
-| `config_g6_6view.json` | **Python dict**(用 `exec` 讀,裡面是 `np.array(...)`)| `batch_project.py`、`main_only_projector.py`、`targetless_refine.py` |
-| `g6_calibration.json` | **標準 JSON**(純數字陣列)| 一般程式 / 其他工具讀取用 |
+| `config_g6_6view.json` | **Python dict**(用 `exec` 讀,值是 `np.array`)| `alignment_tool`、`batch_project`、`main_only_projector` |
+| `g6_calibration.json` | **標準 JSON**(純數字)| 一般程式讀取用 |
 
 每台相機欄位:
-- `type` / `model`:`fisheye`(main/left/right/rear)或 `pinhole`(sideL/sideR)
-- `K`:內參矩陣(對應該解析度);`scale`:投影時的縮放
-- `D`:畸變係數(魚眼 4 個 k1~k4;針孔 5 個 k1,k2,p1,p2,k3)
-- `T`:4×4 外參,**光達座標 → 相機座標**
+- `type`:`fisheye`(main/left/right/rear)或 `pinhole`(sideL/sideR)
+- `K`:內參矩陣;`scale`:投影時縮放(通常 1.0)
+- `D`:畸變(魚眼 4 個 k1~k4;針孔 5 個 k1,k2,p1,p2,k3)
+- `T`:4×4 外參,**光達 → 相機**
 
-> ⚠️ 主相機雖然是**廣角鏡頭**,但數學上用 `cv2.fisheye`(Kannala-Brandt)模型投影 —— 這是投影模型的選擇,不代表硬體是魚眼。
-
----
-
-## 7. 互動式外參微調 GUI `tuner/`
-
-`alignment_tool.py` 是一支 **PyQt5 互動視窗**,用來**手動微調外參**——
-出車後感測器架每次重裝、外參會跑掉,實務上就是開這支,一邊看投影一邊拉 slider 對齊,對好按 Save 存回 config。**逐日校正的主力工具。**
-
-**功能:**
-- 左邊即時顯示「光達點雲投影疊在相機影像上」(滾輪縮放、拖移、雙擊還原)
-- 右邊 slider 即時調 **外參**(tx/ty/tz、roll/pitch/yaw)、**內參**(fx/fy/cx/cy/scale)、**畸變**(k1,k2,p1,p2,k3)
-- 上方可切**相機**(main/rear/left/right/sideL/sideR)、切**場景 session**、前後翻 frame
-- **Save Config** 直接寫回 `config_g6_6view.json`(依相機型別存 K 或 K_native);**還原參數** 撤銷所有微調
-
-**用法:**
-```bash
-python tuner/alignment_tool.py
-```
-- 開起來後在上方 **Data Root** 選你的 data 根目錄(預設找 `alignment_tool.py` 同層的 `data/`)。
-- config 會自動往上層找 `config_g6_6view.json`(會跳過含「複製/副本/copy/bak」字樣的備份檔)。
-- 資料夾結構同 [第 0 節](#0-資料格式重要)。
-
-> `tuner/` 的投影函式跟 `projection/batch_project.py` 是同一套投影邏輯(fisheye / pinhole 兩種模型 + 針孔光軸夾角過濾),差別只在這支是互動式、批次那支是無頭輸出影片。
+> ⚠️ 主相機雖是**廣角鏡頭**,數學上仍用 `cv2.fisheye`(Kannala-Brandt)模型投影——這是投影模型的選擇,不代表硬體是魚眼。
 
 ---
 
-## 8. 一次跑完的順序(新相機從零校正)
+## 一頁流程總覽
 
 ```
-1. detect_grid.py           確認棋盤尺寸
-2. calib_fisheye_final.py   算內參 K, D           → 填進 config
-3. verify_undistort.py      確認去畸變正常
-4. auto_extrinsic.py        算外參 T              → 填進 config
-5. batch_project.py         投影疊圖,肉眼驗證對齊
-6.（可選）targetless_refine.py  用場景邊緣再精修 T
-7.（每次出車)tuner/alignment_tool.py  開 GUI 手動微調當日外參 → Save
+【內參】每台相機一次就好
+  1. detect_grid.py         確認棋盤尺寸
+  2. calib_fisheye_final.py 算 K, D(看 RMS)
+  3. verify_undistort.py    去畸變驗證
+  4. 填回 config
+
+【外參】每次出車都要重調
+  5. tuner/alignment_tool.py  開 GUI 手動對齊 → Save   🚧 細節待補
+     (進階:extrinsic/ 自動腳本  🚧 待補)
+
+【驗證】
+  6. batch_project.py        投影疊圖串影片,肉眼確認
 ```
