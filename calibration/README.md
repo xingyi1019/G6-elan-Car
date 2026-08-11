@@ -170,11 +170,66 @@ pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 
 # 外參校正
 
-> 🚧 **外參詳細教學待補**。目前先用下面的互動工具**手動對齊**。
+外參有兩條路,建議搭配用:
 
-## 3. 用 `tuner/alignment_tool.py` 手動調外參(主要方式)
+| 方式 | 工具 | 何時用 |
+|---|---|---|
+| **§3 正規標定** | MATLAB **Lidar Camera Calibrator** | 有棋盤板,第一次 / 重新標定,要一個準確起點 |
+| **§4 手動微調** | `tuner/alignment_tool.py` | 出車後感測器架重裝、外參跑掉,肉眼對齊修正(日常) |
 
-出車後感測器架每次重裝,外參都會跑掉。實務做法就是**開這支 GUI,一邊看投影一邊拉 slider 對齊**,對好按 Save 存回 config。
+實務上:**先用 MATLAB 算一組準的外參 → 填進 config → 之後每次出車用 alignment_tool 微調。**
+
+## 3. MATLAB Lidar Camera Calibrator(正規求外參)
+
+MATLAB 有官方 App「**Lidar Camera Calibrator**」,用棋盤板自動算光達↔相機外參。
+
+### 需要
+- MATLAB + **Lidar Toolbox** + **Computer Vision Toolbox**
+- 棋盤板(知道**格子邊長**,通常填 mm)
+- paired 資料:一疊「同時拍到棋盤」的影像 + 對應點雲(`.pcd` / `.ply`)
+- **相機內參**(前面內參階段算好的 K, D → 做成 MATLAB 的 `cameraIntrinsics` 物件)
+
+### 步驟
+1. **開 App** — MATLAB 指令列輸入:
+   ```matlab
+   lidarCameraCalibrator
+   ```
+   (或上方 **Apps** 頁籤找 Lidar Camera Calibrator)
+2. **匯入資料** — 工具列 Import:
+   - 選**影像資料夾** + **點雲資料夾**
+   - 填**棋盤格邊長**(square size)
+   - 載入**相機內參**(`cameraIntrinsics` 物件,從 workspace 選)
+3. **偵測** — App 自動在影像偵測棋盤角點、在點雲偵測棋盤平面。
+   點雲那邊若抓不到,調 **ROI / Cluster Threshold / 板子尺寸**,把棋盤那塊框出來。
+4. **Calibrate** — 按下去,算出每個 pair 的外參並統整。
+5. **看誤差** — App 顯示 reprojection / translation / rotation error 長條圖。
+   **把誤差特別大的 pair 取消勾選 → 重按 Calibrate**,直到誤差穩定。
+6. **匯出** — Export:匯出到 workspace(得到 `tform`,光達→相機的剛體變換),
+   或 Export → Generate MATLAB Script。
+
+### 把 MATLAB 的 `tform` 轉成我們 config 的 `T`
+- **新版 `rigidtform3d`**:直接用 `tform.A` —— 那就是 4×4 的 `[R t; 0 0 0 1]`(光達→相機),
+  貼進 config 對應相機的 `'T'`。
+- ⚠️ **舊版 `rigid3d`**:`tform.T` 是**列向量(post-multiply)慣例**,要**轉置**才對:
+  ```matlab
+  R = tform.T(1:3,1:3)';   t = tform.T(4,1:3)';
+  T = [R t; 0 0 0 1];      % 這才是我們要的 光達→相機
+  ```
+- 填完**一定要用「投影驗證」看對不對**;沒對齊最常見就是**轉置**或**相機軸慣例**差異。
+
+### ⚠️ 魚眼 / 廣角相機的注意
+這個 App 的棋盤偵測/重投影是走**針孔內參**(`cameraIntrinsics`)。
+主相機(廣角)、環景魚眼**不能直接**丟原始魚眼影像:
+- 做法:先用前面內參把影像**去畸變成針孔影像**,再用**去畸變後的針孔內參**餵給 App;
+  算出來的外參 T 照樣能用(**外參跟畸變無關**)。
+- **sideL / sideR 本來就是針孔**,可以直接用。
+
+> 各版本 MATLAB 介面細節略有不同,以 App 內提示為準。
+> 不想開 App、想寫腳本批次算,對應函式是 `estimateLidarCameraTransform`。
+
+## 4. `tuner/alignment_tool.py` 手動微調(日常 / 沒板子時)
+
+出車後感測器架每次重裝,外參都會跑掉。**開這支 GUI,一邊看投影一邊拉 slider 對齊**,對好按 Save 存回 config。
 
 **開啟:**
 ```bash
@@ -186,19 +241,17 @@ python tuner/alignment_tool.py
 - **右邊 slider**:調**外參** tx/ty/tz(公尺)、roll/pitch/yaw(度);也能微調內參/畸變
 - **上方**:選 Data Root、切場景 session、切相機、前後翻 frame
 
-**操作大概:**
+**操作:**
 1. 上方 **Data Root** 選你的 data 根目錄(預設找 `alignment_tool.py` 同層的 `data/`)。
-2. 選 **Camera**(main/left/right/rear/sideL/sideR),它會自動載入 config 裡該相機的 K/D/T。
-3. 拉右邊 **Extrinsic** 的 slider(先調 yaw/pitch/roll 對角度,再調 tx/ty/tz 對位置),
-   讓點雲的輪廓**貼齊**影像上物體邊緣(電線桿、車、號誌)。
-4. 對好按 **Save Config** → 寫回 `config_g6_6view.json`。按錯了按 **還原參數** 撤銷。
+2. 選 **Camera**,它會自動載入 config 裡該相機的 K/D/T(建議先用 §3 MATLAB 算好的當起點)。
+3. 拉 **Extrinsic** slider(先調 yaw/pitch/roll 對角度,再調 tx/ty/tz 對位置),
+   讓點雲輪廓**貼齊**影像上物體邊緣(電線桿、車、號誌)。
+4. 對好按 **Save Config** → 寫回 `config_g6_6view.json`;按錯按 **還原參數** 撤銷。
 
-> 🚧 **逐格對齊的細節技巧(先調哪軸、看什麼判斷對齊)教學待補**,之後補。
+## 5.（進階,選用)Python 自動外參腳本
 
-## 4.（進階,選用)自動外參腳本
-
-`extrinsic/` 裡另有幾支**自動**求外參的腳本(有棋盤板 PnP、無板邊緣相關精修)。
-🚧 **這部分教學待補**,先不用;需要時再看檔案內的說明註解。
+`extrinsic/` 裡另有幾支 Python **自動**求外參的腳本(有棋盤板 PnP、無板邊緣相關精修)。
+🚧 **這部分教學待補**,先用 §3 MATLAB 即可;需要時再看檔案內的說明註解。
 
 ---
 
@@ -257,9 +310,10 @@ python projection/main_only_projector.py \
   3. verify_undistort.py    去畸變驗證
   4. 填回 config
 
-【外參】每次出車都要重調
-  5. tuner/alignment_tool.py  開 GUI 手動對齊 → Save   🚧 細節待補
-     (進階:extrinsic/ 自動腳本  🚧 待補)
+【外參】
+  5a.(正規)MATLAB Lidar Camera Calibrator  用棋盤板算外參 → 填 config
+  5b.(日常)tuner/alignment_tool.py  每次出車開 GUI 手動微調 → Save
+     (進階:extrinsic/ Python 自動腳本  🚧 待補)
 
 【驗證】
   6. batch_project.py        投影疊圖串影片,肉眼確認
