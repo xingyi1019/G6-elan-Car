@@ -32,11 +32,12 @@
 ## 1. 環境
 
 ```bash
-pip install opencv-contrib-python numpy scipy matplotlib pillow
+pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 # 投影影片需要 ffmpeg(batch_project.py 用)
 ```
 
 ⚠️ 一定要 **opencv-contrib-python**(不是純 opencv-python),因為魚眼校正用到 `cv2.fisheye.*`。
+`PyQt5` 只有互動式微調 GUI(`tuner/`)才需要,純腳本流程不用。
 
 ---
 
@@ -151,7 +152,30 @@ python projection/main_only_projector.py \
 
 ---
 
-## 7. 一次跑完的順序(新相機從零校正)
+## 7. 互動式外參微調 GUI `tuner/`
+
+`alignment_tool.py` 是一支 **PyQt5 互動視窗**,用來**手動微調外參**——
+出車後感測器架每次重裝、外參會跑掉,實務上就是開這支,一邊看投影一邊拉 slider 對齊,對好按 Save 存回 config。**逐日校正的主力工具。**
+
+**功能:**
+- 左邊即時顯示「光達點雲投影疊在相機影像上」(滾輪縮放、拖移、雙擊還原)
+- 右邊 slider 即時調 **外參**(tx/ty/tz、roll/pitch/yaw)、**內參**(fx/fy/cx/cy/scale)、**畸變**(k1,k2,p1,p2,k3)
+- 上方可切**相機**(main/rear/left/right/sideL/sideR)、切**場景 session**、前後翻 frame
+- **Save Config** 直接寫回 `config_g6_6view.json`(依相機型別存 K 或 K_native);**還原參數** 撤銷所有微調
+
+**用法:**
+```bash
+python tuner/alignment_tool.py
+```
+- 開起來後在上方 **Data Root** 選你的 data 根目錄(預設找 `alignment_tool.py` 同層的 `data/`)。
+- config 會自動往上層找 `config_g6_6view.json`(會跳過含「複製/副本/copy/bak」字樣的備份檔)。
+- 資料夾結構同 [第 0 節](#0-資料格式重要)。
+
+> `tuner/` 的投影函式跟 `projection/batch_project.py` 是同一套投影邏輯(fisheye / pinhole 兩種模型 + 針孔光軸夾角過濾),差別只在這支是互動式、批次那支是無頭輸出影片。
+
+---
+
+## 8. 一次跑完的順序(新相機從零校正)
 
 ```
 1. detect_grid.py           確認棋盤尺寸
@@ -160,4 +184,5 @@ python projection/main_only_projector.py \
 4. auto_extrinsic.py        算外參 T              → 填進 config
 5. batch_project.py         投影疊圖,肉眼驗證對齊
 6.（可選）targetless_refine.py  用場景邊緣再精修 T
+7.（每次出車)tuner/alignment_tool.py  開 GUI 手動微調當日外參 → Save
 ```
