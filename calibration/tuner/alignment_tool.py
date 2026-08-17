@@ -207,7 +207,14 @@ def project_and_draw(
     t = T[:3,  3]
 
     pts_c = (R @ pts.T).T + t
-    mask  = (pts_c[:, 2] > min_depth) & (pts_c[:, 2] < max_depth)
+    if cam_type == 'fisheye':
+        # 魚眼(尤其環景 ~183°):以「到相機距離」而非 z 做深度過濾,並用入射角(atan2)上限
+        # 保留 θ>90° 的外圈點(z 過濾會把它們誤刪);θ 上限 93° 濾掉鏡頭視野外(背向)的點。
+        _rng = np.linalg.norm(pts_c, axis=1)
+        _thd = np.degrees(np.arctan2(np.hypot(pts_c[:, 0], pts_c[:, 1]), pts_c[:, 2]))
+        mask = (_rng > min_depth) & (_rng < max_depth) & (_thd < 93.0)
+    else:
+        mask = (pts_c[:, 2] > min_depth) & (pts_c[:, 2] < max_depth)
 
     # 光軸夾角過濾(針孔大角度會數值摺疊,sideL/sideR 必須過濾)
     if fov_half_deg > 0:
@@ -250,13 +257,16 @@ def project_and_draw(
         ], dtype=np.float64)
 
     if cam_type == 'fisheye':
-        # cv2.fisheye model: D is 4×1  [k1, k2, k3, k4]
-        D_fish = D[:4].astype(np.float64).reshape(4, 1)
-        pts_cam = pts_c.reshape(-1, 1, 3).astype(np.float64)
-        img_pts, _ = cv2.fisheye.projectPoints(
-            pts_cam, np.zeros((3, 1)), np.zeros((3, 1)), Ks, D_fish)
-        u = img_pts[:, 0, 0]
-        v = img_pts[:, 0, 1]
+        # KB 魚眼投影,θ 以 atan2 計算(可達 180°)。cv2.fisheye.projectPoints 內部用
+        # atan(r/z),在 θ>90°(z<0)會把外圈點摺回影像內側;環景 ~183° 魚眼必須自行實作。
+        _d = D[:4].astype(np.float64).flatten()
+        _x = pts_c[:, 0]; _y = pts_c[:, 1]; _z = pts_c[:, 2]
+        _rxy = np.hypot(_x, _y)
+        _th = np.arctan2(_rxy, _z)
+        _r = _th + _d[0]*_th**3 + _d[1]*_th**5 + _d[2]*_th**7 + _d[3]*_th**9
+        _sp = np.where(_rxy > 1e-9, _r / np.maximum(_rxy, 1e-9), 0.0)
+        u = Ks[0, 0] * _sp * _x + Ks[0, 2]
+        v = Ks[1, 1] * _sp * _y + Ks[1, 2]
     else:
         # pinhole / standard:套 OpenCV 官方 Brown-Conrady (對應 sideL/sideR tuner)
         D5 = np.zeros(5, dtype=np.float64)
