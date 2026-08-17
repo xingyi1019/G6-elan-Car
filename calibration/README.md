@@ -248,10 +248,28 @@ python tuner/alignment_tool.py
    讓點雲輪廓**貼齊**影像上物體邊緣(電線桿、車、號誌)。
 4. 對好按 **Save Config** → 寫回 `config_g6_6view.json`;按錯按 **還原參數** 撤銷。
 
-## 5.（進階,選用)Python 自動外參腳本
+## 5. Python 自動外參腳本(用棋盤板算)
 
-`extrinsic/` 裡另有幾支 Python **自動**求外參的腳本(有棋盤板 PnP、無板邊緣相關精修)。
-🚧 **這部分教學待補**,先用 §3 MATLAB 即可;需要時再看檔案內的說明註解。
+`extrinsic/` 內有兩支,都是 **target-based**(要有棋盤板 + 對應點雲):
+
+| 腳本 | 方法 | 說明 |
+|---|---|---|
+| **`extrinsic_calibrate.py`** ★ | **平面對平面**(Zhang–Pless 風格) | 相機端 `solvePnP` 得板平面、光達端 RANSAC 得同一塊板平面 → **Kabsch 解 R、點到平面最小平方解 t**。會同時印出「初始外參 vs 新算外參」的平面對齊殘差(cm),可直接判斷有沒有變好。 |
+| `auto_extrinsic.py` | 板平面 + PnP | 點雲 RANSAC 找棋盤平面 → 在平面上重建 3D 角點 → `solvePnP`;多張取中位數。內參為硬寫,需自行確認。 |
+
+**用法(`extrinsic_calibrate.py`):**
+```bash
+python extrinsic/extrinsic_calibrate.py \
+    --img-dir <棋盤影像資料夾> \
+    --pcd-dir <對應點雲資料夾> \
+    --ext png --square 0.10 \
+    --out ./ext_result
+```
+影像與點雲**檔名要相同**(如 `001.png` ↔ `001.pcd`)。輸出 `T_new_extrinsic.npy`,
+並印出 4×4 的 `T_new`,確認殘差有下降後再貼進 `config_g6_6view.json` 的 `'T'`。
+
+> 實測參考:以 23 組棋盤配對執行,平面對齊殘差由 **30.25 cm → 3.21 cm**。
+> 板子姿態要夠多樣(程式會檢查法向量分散度),否則解不可靠。
 
 ---
 
