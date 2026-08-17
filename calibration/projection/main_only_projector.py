@@ -35,8 +35,11 @@ else:
                   [0, 0, 1]], dtype=np.float64)
 D = np.asarray(cam['D'], dtype=np.float64).flatten()[:4].reshape(4, 1)
 T = np.asarray(cam['T'], dtype=np.float64)
+# main 相機 K 之標定解析度(K 在此解析度下量得;不同解析度影像會自動縮放 K)
+MAIN_CALIB_W, MAIN_CALIB_H = 2560, 1440
 print(f"📋 載入 main 相機參數:scale={scale:.4f}, K={K.flatten()[:6].tolist()}")
 print(f"   D={D.flatten().tolist()}, T_trans={T[:3, 3].tolist()}")
+print(f"   K 標定解析度={MAIN_CALIB_W}x{MAIN_CALIB_H}(影像若非此解析度,投影時自動縮放 K)")
 
 
 # ─── PCD reader ───────────────────────────────────────────────────────────
@@ -79,6 +82,11 @@ def read_pcd(filepath):
 # ─── 投影 ─────────────────────────────────────────────────────────────────
 def project_main(img, pts):
     h, w = img.shape[:2]
+    # 依實際影像解析度縮放 K(K 於 2560x1440 標定;4K=3840x2160 會自動 ×1.5)
+    sx, sy = w / MAIN_CALIB_W, h / MAIN_CALIB_H
+    Ks = K.copy()
+    Ks[0, 0] *= sx; Ks[0, 2] *= sx
+    Ks[1, 1] *= sy; Ks[1, 2] *= sy
     R, t = T[:3, :3], T[:3, 3]
     pts_cam = (R @ pts.T).T + t
     mask = (pts_cam[:, 2] > 0.5) & (pts_cam[:, 2] < 100.0)
@@ -87,7 +95,7 @@ def project_main(img, pts):
 
     img_pts, _ = cv2.fisheye.projectPoints(
         p.reshape(-1, 1, 3).astype(np.float64),
-        np.zeros((3, 1)), np.zeros((3, 1)), K, D)
+        np.zeros((3, 1)), np.zeros((3, 1)), Ks, D)
     u = img_pts[:, 0, 0].astype(int)
     v = img_pts[:, 0, 1].astype(int)
     dist = np.linalg.norm(p, axis=1)

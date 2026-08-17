@@ -155,6 +155,9 @@ def process_scenario(scenario_dir, cam_name, cfg, out_dir,
     T = np.asarray(cam['T'], dtype=np.float32)
     scale = float(cam['scale'])
     cam_type = cam['type']
+    # 各相機 K 之標定參考解析度;影像若非此解析度(如 main 改成 4K),投影時依比例縮放 K
+    REF_RES = {'main': (2560, 1440), 'left': (1280, 1024),
+               'right': (1280, 1024), 'rear': (1280, 1024)}
 
     os.makedirs(out_dir, exist_ok=True)
     count = 0
@@ -171,9 +174,12 @@ def process_scenario(scenario_dir, cam_name, cfg, out_dir,
         pts = read_pcd(pcd_path)
         if len(pts) == 0:
             continue
+        # 依實際影像解析度縮放 K(4K main 自動 ×1.5)
+        ref_w = REF_RES.get(cam_name, (img_bgr.shape[1], img_bgr.shape[0]))[0]
+        eff_scale = scale * (img_bgr.shape[1] / ref_w)
         try:
             result = project_to_image(
-                pts, img_bgr, K, D, T, scale,
+                pts, img_bgr, K, D, T, eff_scale,
                 point_r=point_r, cam_type=cam_type, opacity=opacity)
         except Exception as e:
             print(f"  ⚠️ frame {idx} 投影失敗:{e}")

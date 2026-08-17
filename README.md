@@ -23,7 +23,7 @@
 | 感測器 | 型號 / 規格 | 網段 / 介面 |
 |---|---|---|
 | 光達 | Velodyne **VLS-128**（128 線、約 10 Hz） | `192.168.1.201`（乙太網） |
-| 主相機 | 4K 前視（約 120° 廣角，運行降配 2560×1440） | RTSP `192.168.100.26` |
+| 主相機 | 4K 前視（約 120° 廣角）<br>`_V2` 起錄 **原生 4K 3840×2160**；舊版降配 2560×1440 | RTSP `192.168.100.26` |
 | 側方五路相機 | 三路環景魚眼 ＋ 兩路後側方針孔（1920×1536） | RTSP `192.168.100.2 ~ .6` |
 | 雷達 | Continental **ARS408**（僅錄原始 CAN） | Kvaser CAN `can0` |
 | IMU | 9-DoF（razor 系列，約 50 Hz） | `/dev/ttyACM0` |
@@ -78,7 +78,8 @@ evil_elan_ccar/
 │   ├── sync_camera_time.sh← 相機/光達時間同步（chrony + ntpd + NTP CGI）
 │   └── record_time.sh     ← 設情境並錄製 rosbag
 ├── camera/                ← 相機蒐集節點
-│   ├── cme_cv2_rtsp6cam.py← 六路相機整合蒐集（主要流程，含 OSD topic）
+│   ├── cme_cv2_rtsp6cam_V2.py ← 六路相機整合蒐集【最新／主相機 4K 原生】
+│   ├── cme_cv2_rtsp6cam.py← 六路相機整合蒐集（舊版，主相機降配 2560×1440）
 │   ├── cme_cv2_rtsp1cam.py← 單路相機蒐集（主要流程）
 │   ├── cme_cv2_maincam.py ← 主相機（測試版本）
 │   └── cme_cv2_sidecam.py ← 側方相機（測試版本）
@@ -169,6 +170,18 @@ git clone https://github.com/xingyi1019/G6-elan-Car.git
 
 ### `shell/sync_camera_time.sh`
 三層對時：① 本機 Chrony；② VLS-128 透過 CGI 設 NTP server；③ 5 路側相機 SSH `date -s`；④ 主相機 telnet 偵測並啟動 `ntpd -p <本機IP>` 常駐；⑤ 驗證 ntpd。相機網段 `192.168.100.x`、光達網段 `192.168.1.x`。
+
+### `camera/cme_cv2_rtsp6cam_V2.py`【現行主要流程】
+六路 RTSP → ffmpeg 解碼 → TurboJPEG 壓 JPEG → 發成 `CompressedImage`。與舊版差異:
+
+- **主相機保留原生 4K(3840×2160)不再降配**;側方五路仍縮至 1280×1024。
+- 主相機走 **GPU 硬解**(`hevc_cuvid` + CUDA),並以 **3 條編碼執行緒**才壓得動 4K@30。
+- 主相機 HEVC 串流的色彩標記(VUI)是錯的(標成 gbr),swscale 會拒絕轉換 → 改用 **`nv12` 直通**輸出、NV12→I420 在 numpy 做,繞過 swscale。若要改走 swscale 可把 `out_pix_fmt` 設為 `yuv420p`(會用 `setparams` 覆寫錯誤標記)。
+- 以 `seq` 保證發佈順序,多執行緒編碼不會送出過期畫面;ffmpeg stderr 存 ring buffer,斷線重啟時印出原因。
+- 需要 **PyTurboJPEG ≥ 1.6.0**(`pip3 install -U PyTurboJPEG`);除錯用 `CAM_DEBUG=1 python3 cme_cv2_rtsp6cam_V2.py`。
+
+> ⚠️ 錄到的主相機影像變成 4K 後,**投影時內參 K 需依實際解析度縮放**(3840/2560 = ×1.5);
+> `calibration/` 內的投影與微調程式已支援自動判斷解析度。
 
 ### `shell/record_time.sh`
 互動式錄製選單，情境命名 `road_type_weather_time_period`（如 `citystreet_sunny_day`），`rosbag record --duration=N --buffsize=2048` 訂閱全部 topic。

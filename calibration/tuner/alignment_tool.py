@@ -235,11 +235,18 @@ def project_and_draw(
             [0,            0,            1            ],
         ], dtype=np.float64)
     else:
-        # 一般情況: 單一 scale 同時乘 fx/fy/cx/cy(main fisheye 等)
+        # 一般情況(main / 環景魚眼): 依實際影像解析度自動縮放 K。
+        # K 之標定寬由 cx 推得(main≈2560、環景≈1280),取最接近者;
+        # 影像若等於標定解析度(如 2560),res_scale=1.0 行為與原本相同(向後相容);
+        # 若為 4K(3840),res_scale=1.5 自動放大。scale 滑桿仍可在其上微調。
+        _peek = PILImage.open(img_path); _W, _H = _peek.size; _peek.close()
+        _ref_w = min((2560, 1280), key=lambda w: abs(w - 2.0 * K[0, 2]))
+        _res_scale = _W / float(_ref_w)
+        s = scale * _res_scale
         Ks = np.array([
-            [K[0, 0] * scale, 0,              K[0, 2] * scale],
-            [0,               K[1, 1] * scale, K[1, 2] * scale],
-            [0,               0,               1              ],
+            [K[0, 0] * s, 0,           K[0, 2] * s],
+            [0,           K[1, 1] * s, K[1, 2] * s],
+            [0,           0,           1          ],
         ], dtype=np.float64)
 
     if cam_type == 'fisheye':
