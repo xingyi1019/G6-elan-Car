@@ -170,14 +170,15 @@ pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 
 # 外參校正
 
-外參有兩條路,建議搭配用:
+外參有三條路,建議搭配用:
 
 | 方式 | 工具 | 何時用 |
 |---|---|---|
 | **§3 正規標定** | MATLAB **Lidar Camera Calibrator** | 有棋盤板,第一次 / 重新標定,要一個準確起點 |
+| **§5 板平面法** | `extrinsic/extrinsic_calibrate.py` | 不想開 MATLAB,用棋盤板 + Python 自己算(目前主相機) |
 | **§4 手動微調** | `tuner/alignment_tool.py` | 出車後感測器架重裝、外參跑掉,肉眼對齊修正(日常) |
 
-實務上:**先用 MATLAB 算一組準的外參 → 填進 config → 之後每次出車用 alignment_tool 微調。**
+實務上:**先用 MATLAB 或 §5 板平面法算一組準的外參 → 填進 config → 之後每次出車用 alignment_tool 微調。**
 
 ## 3. MATLAB Lidar Camera Calibrator(正規求外參)
 
@@ -248,28 +249,66 @@ python tuner/alignment_tool.py
    讓點雲輪廓**貼齊**影像上物體邊緣(電線桿、車、號誌)。
 4. 對好按 **Save Config** → 寫回 `config_g6_6view.json`;按錯按 **還原參數** 撤銷。
 
-## 5. Python 自動外參腳本(用棋盤板算)
+## 5. Python 板平面法自動外參(用棋盤板算)
 
-`extrinsic/` 內有兩支,都是 **target-based**(要有棋盤板 + 對應點雲):
+不想開 MATLAB,也可以用純 Python 腳本,用**棋盤板的「平面」**把光達↔相機對起來
+(和 §3 MATLAB 同一個原理,只是自己算)。`extrinsic/` 內有兩支,都是 **target-based**
+(要有棋盤板 + 對應點雲),**目前都是針對「主相機」寫的**(讀 config 裡 `main` 的內參):
 
 | 腳本 | 方法 | 說明 |
 |---|---|---|
-| **`extrinsic_calibrate.py`** ★ | **平面對平面**(Zhang–Pless 風格) | 相機端 `solvePnP` 得板平面、光達端 RANSAC 得同一塊板平面 → **Kabsch 解 R、點到平面最小平方解 t**。會同時印出「初始外參 vs 新算外參」的平面對齊殘差(cm),可直接判斷有沒有變好。 |
+| **`extrinsic_calibrate.py`** ★ 建議 | **平面對平面**(Zhang–Pless 風格) | 相機端 `solvePnP` 得板平面、光達端 RANSAC 得同一塊板平面 → **Kabsch 解 R、點到平面最小平方解 t**。會同時印出「初始外參 vs 新算外參」的平面對齊殘差(cm),直接判斷有沒有變好。 |
 | `auto_extrinsic.py` | 板平面 + PnP | 點雲 RANSAC 找棋盤平面 → 在平面上重建 3D 角點 → `solvePnP`;多張取中位數。內參為硬寫,需自行確認。 |
 
-**用法(`extrinsic_calibrate.py`):**
+### 原理(白話)
+同一塊棋盤板,**同時被光達和相機看到**。程式對每一個姿勢:
+- **相機側**:偵測棋盤 → 用內參 `solvePnP` → 算出「板子平面」在**相機座標**的方程式。
+- **光達側**:把點雲裡**板子那片平面**的點框出來、擬合 → 算出板子平面在**光達座標**的方程式。
+
+有了 N 組「同一塊板、兩邊平面」的對應,就解出外參:
+**R**(旋轉)= 對齊兩邊平面法向量;**t**(平移)= 點到平面最小平方。
+
+### 事前:拍「成對」資料(和內參不同!)
+內參只要照片;**外參要「影像 + 對應點雲」成對**,而且**板子要同時進到光達和該相機的視野**:
+```
+main_extric/
+├── png/   000000.png 000001.png ...   # 主相機影像
+└── pcd/   000000.pcd 000001.pcd ...    # 同名對應的光達點雲
+```
+拿棋盤板,擺在光達+相機都看得到的地方,換 **20+ 個不同距離/傾角**,每個姿勢同時存影像+點雲。
+板子**斜著擺、換高低左右**(法向量要夠分散,不然解不穩,程式會警告)。
+
+### 跑(`extrinsic_calibrate.py`)
 ```bash
 python extrinsic/extrinsic_calibrate.py \
-    --img-dir <棋盤影像資料夾> \
-    --pcd-dir <對應點雲資料夾> \
-    --ext png --square 0.10 \
+    --img-dir <你的>/main_extric/png \
+    --pcd-dir <你的>/main_extric/pcd \
+    --ext png \
+    --square 0.108 \
     --out ./ext_result
 ```
-影像與點雲**檔名要相同**(如 `001.png` ↔ `001.pcd`)。輸出 `T_new_extrinsic.npy`,
-並印出 4×4 的 `T_new`,確認殘差有下降後再貼進 `config_g6_6view.json` 的 `'T'`。
+- 影像與點雲**檔名要相同**(如 `000012.png` ↔ `000012.pcd`)。
+- `--square` = 棋盤**每格邊長(公尺)**,務必填對(例 10.8cm → `0.108`)。
+- 若你的板子不是 9×6 內角點,**改腳本第 23 行 `CB = (9, 6)`**。
+- `--stride` 資料很多時可調大(隔幾張抽一張)加速。
 
-> 實測參考:以 23 組棋盤配對執行,平面對齊殘差由 **30.25 cm → 3.21 cm**。
-> 板子姿態要夠多樣(程式會檢查法向量分散度),否則解不可靠。
+### 看結果
+跑完會印出、並輸出 `T_new_extrinsic.npy`:
+```
+  外參校正結果 (平面對平面法)
+# 初始外參 (config) 平面殘差: 30.25 cm
+# 新校正外參      平面殘差: 3.21 cm      ← 越小越好
+# 初始 t / 新 t : [...]
+T_new = np.array([ ... ])                 ← 複製這個 4×4 貼回 config 的 'T'
+```
+- **平面殘差** = 光達點落在相機板平面上差多少,**越小越準**(實測主相機 23 組:30.25 → 3.21cm)。
+- 程式有**自動防呆**:板姿態太單一、平移 > 1m(車頂感測器間距不該這麼大)都會**跳警告**,別照抄不合理的解。
+- 把 `T_new` 貼回 `config` 對應相機的 `'T'` 後,**一定要用下面「投影驗證」看對不對**。
+
+### ⚠️ 誠實提醒(會卡人的地方)
+1. **這兩支目前是為「主相機」寫的**;要用在 left/right/rear/side 幾路,得改成讀那顆相機的內參、並確認板子在該相機視野內。
+2. **主相機用這支能跑到 3.2cm**;但**側方/後方 + 魚眼幾路比較難**——側相機曾發生**自動偵測不到板子**、魚眼幾何也讓外參較難收斂。那幾顆**現況多半是 §4 手動微調**出來的,不是腳本一鍵搞定。
+3. **務實流程**:main 先用這支(或 §3 MATLAB)拿到準的起點 → 其餘幾路做好心理準備,多半要用 `alignment_tool.py` **手動對齊**收尾。
 
 ---
 
@@ -330,8 +369,8 @@ python projection/main_only_projector.py \
 
 【外參】
   5a.(正規)MATLAB Lidar Camera Calibrator  用棋盤板算外參 → 填 config
-  5b.(日常)tuner/alignment_tool.py  每次出車開 GUI 手動微調 → Save
-     (進階:extrinsic/ Python 自動腳本  🚧 待補)
+      或 extrinsic_calibrate.py            Python 板平面法自算(主相機)→ 填 config
+  5b.(日常)tuner/alignment_tool.py        每次出車開 GUI 手動微調 → Save
 
 【驗證】
   6. batch_project.py        投影疊圖串影片,肉眼確認
