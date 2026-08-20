@@ -17,7 +17,7 @@ IMG_DIR = r"E:\Car\calibration_data_rear\png"
 CB = (9, 6)
 
 ap = argparse.ArgumentParser(description="魚眼內參校正(KB 模型)")
-ap.add_argument('--img-dir', default=IMG_DIR, help='棋盤照片資料夾')
+ap.add_argument('--img-dir', default=None, help='棋盤照片資料夾(不給=懶人模式,自動找目前資料夾或 ./images)')
 ap.add_argument('--cb', default=f"{CB[0]}x{CB[1]}", help='內角點,如 9x6')
 ap.add_argument('--ext', default='', help='副檔名(png/jpg);留空=自動抓 png+jpg')
 ap.add_argument('--draw', action='store_true', help='輸出每張角點偵測圖到 <out>/corners/')
@@ -25,15 +25,22 @@ ap.add_argument('--out', default='calib_out', help='輸出資料夾(--draw 用)'
 ap.add_argument('--cam', default='cam', help='相機名稱(僅顯示用)')
 args = ap.parse_args()
 
-IMG_DIR = args.img_dir
 CB = tuple(int(x) for x in args.cb.lower().split('x'))
-if args.ext:
-    imgs = sorted(glob.glob(os.path.join(IMG_DIR, f"*.{args.ext.lstrip('.')}")))
+EXTS = (f"*.{args.ext.lstrip('.')}",) if args.ext else ("*.png","*.jpg","*.jpeg","*.bmp")
+def grab(d):
+    return sorted(sum((glob.glob(os.path.join(d, e)) for e in EXTS), []))
+
+# 決定 IMG_DIR:--img-dir 優先;否則懶人模式(目前資料夾 → ./images → 檔案內預設)
+if args.img_dir:
+    IMG_DIR = args.img_dir; imgs = grab(IMG_DIR)
 else:
-    imgs = sorted(sum((glob.glob(os.path.join(IMG_DIR, e))
-                       for e in ("*.png","*.jpg","*.jpeg","*.bmp")), []))
+    for cand in (".", "images", IMG_DIR):
+        imgs = grab(cand)
+        if imgs: IMG_DIR = cand; break
 if not imgs:
-    sys.exit(f"❌ 在 {IMG_DIR} 找不到影像")
+    sys.exit(f"❌ 找不到影像。用法:python calib_fisheye_final.py --img-dir <資料夾>\n"
+             f"   (或 cd 到有棋盤照片的資料夾直接跑)")
+print(f"影像來源:{os.path.abspath(IMG_DIR)}")
 if args.draw:
     os.makedirs(os.path.join(args.out, "corners"), exist_ok=True)
 

@@ -91,7 +91,13 @@ pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 
 ## 2.2　Step 2:算內參 — `intrinsic/calib_fisheye_final.py`
 
-**直接在指令列指向資料夾就好,不必改檔**:
+**最懶寫法**:`cd` 到放棋盤照片的資料夾(或其上層有 `images/` 的地方),直接無參數跑:
+```bash
+python <路徑>/calib_fisheye_final.py
+```
+沒給 `--img-dir` 時,會自動找「**目前資料夾 → ./images**」裡的照片。棋盤非 9×6 再加 `--cb`。
+
+**指定資料夾寫法**(不必改檔):
 ```bash
 python intrinsic/calib_fisheye_final.py --img-dir <你的棋盤照片資料夾> --cb 9x6
 ```
