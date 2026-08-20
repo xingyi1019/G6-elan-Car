@@ -91,26 +91,30 @@ pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 
 ## 2.2　Step 2:算內參 — `intrinsic/calib_fisheye_final.py`
 
-1. 打開 `intrinsic/calib_fisheye_final.py`,改開頭兩個地方:
-   ```python
-   IMG_DIR = r"E:\Car\calibration_data_rear\png"   # ← 同一個照片資料夾
-   CB = (9, 6)                                      # ← 改成 Step 1 的最佳尺寸
-   ```
-2. 跑:
-   ```bash
-   python intrinsic/calib_fisheye_final.py
-   ```
-3. 它會自動偵測棋盤、逐張剔掉誤差太大的爛圖,最後印出結果:
-   ```
-   ============================================================
-     rear 魚眼內參 (用 38 張, RMS=0.42px)
-   ============================================================
-   # K_base @ 1280x1024
-   K_base = [263.375786, 263.820321, 640.000000, 512.000000]
+**直接在指令列指向資料夾就好,不必改檔**:
+```bash
+python intrinsic/calib_fisheye_final.py --img-dir <你的棋盤照片資料夾> --cb 9x6
+```
+- `--cb` = Step 1 的最佳尺寸(預設 `9x6`)。
+- **副檔名自動抓** png / jpg,不用管。
+- 想順便存「角點偵測圖」(論文那種彩色點),加 `--draw`:
+  ```bash
+  python intrinsic/calib_fisheye_final.py --img-dir <資料夾> --cb 9x6 --draw --out calib_out --cam left
+  ```
+  → 每張偵測到的圖會存到 `calib_out/corners/`。
+- `K0`(bootstrap 起點)**會依你的影像解析度自動設定**(光心=影像中心、焦距≈0.21×寬),換相機/換解析度都不用手改。
 
-   # D [k1,k2,k3,k4]
-   D = [0.42750887, -0.14506998, 0.02445243, -0.00135651]
-   ```
+它會自動偵測棋盤、逐張剔掉誤差太大的爛圖,最後印出結果:
+```
+============================================================
+  left 魚眼內參 (用 39 張, RMS=0.5118px)
+============================================================
+# K_base @ 1920x1536
+K_base = [393.773219, 394.052577, 959.997005, 760.032385]
+
+# D [k1,k2,k3,k4]
+D = [0.45014606, -0.19199791, 0.05453667, -0.00713471]
+```
 
 **怎麼看結果:**
 | 項目 | 意思 | 好壞判斷 |
@@ -119,8 +123,7 @@ pip install opencv-contrib-python numpy scipy matplotlib pillow PyQt5
 | **K_base** | `[fx, fy, cx, cy]` = 焦距 x/y、光心 x/y | — |
 | **D** | 魚眼畸變係數 `[k1,k2,k3,k4]` | — |
 
-> ⚠️ 檔案裡的 `K0`/`D0`(bootstrap 起點)是針對某台相機調的初始猜值。
-> 換相機如果一直發散,把 `K0` 的 `cx,cy` 改成你影像的**一半**(影像寬/2、高/2)再試。
+> 💡 不給 `--img-dir` 時,會沿用檔案開頭的 `IMG_DIR` 預設值(舊用法)。
 
 ---
 

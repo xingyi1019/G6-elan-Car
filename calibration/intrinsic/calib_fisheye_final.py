@@ -1,14 +1,42 @@
 """
 魚眼內參校正 — 最終版:bootstrap 偵測 + 不用 CHECK_COND + 逐張剔高誤差
 盡量保留最多張,只剔真正的壞圖。
+
+用法(直接指向資料夾,不必改檔):
+    python calib_fisheye_final.py --img-dir <棋盤照片資料夾>
+    python calib_fisheye_final.py --img-dir <資料夾> --cb 9x6 --draw
+    --draw 會把每張「偵測到的角點圖」存到 <out>/corners/(論文那種彩色點+連線)
+不給參數時,沿用下方 IMG_DIR / CB 預設值。
 """
-import cv2, glob, os, sys, re
+import cv2, glob, os, sys, argparse
 import numpy as np
 sys.stdout.reconfigure(encoding='utf-8')
 
+# ── 預設值(不給 --img-dir 時沿用)──
 IMG_DIR = r"E:\Car\calibration_data_rear\png"
 CB = (9, 6)
-imgs = sorted(glob.glob(os.path.join(IMG_DIR, "*.png")))
+
+ap = argparse.ArgumentParser(description="魚眼內參校正(KB 模型)")
+ap.add_argument('--img-dir', default=IMG_DIR, help='棋盤照片資料夾')
+ap.add_argument('--cb', default=f"{CB[0]}x{CB[1]}", help='內角點,如 9x6')
+ap.add_argument('--ext', default='', help='副檔名(png/jpg);留空=自動抓 png+jpg')
+ap.add_argument('--draw', action='store_true', help='輸出每張角點偵測圖到 <out>/corners/')
+ap.add_argument('--out', default='calib_out', help='輸出資料夾(--draw 用)')
+ap.add_argument('--cam', default='cam', help='相機名稱(僅顯示用)')
+args = ap.parse_args()
+
+IMG_DIR = args.img_dir
+CB = tuple(int(x) for x in args.cb.lower().split('x'))
+if args.ext:
+    imgs = sorted(glob.glob(os.path.join(IMG_DIR, f"*.{args.ext.lstrip('.')}")))
+else:
+    imgs = sorted(sum((glob.glob(os.path.join(IMG_DIR, e))
+                       for e in ("*.png","*.jpg","*.jpeg","*.bmp")), []))
+if not imgs:
+    sys.exit(f"❌ 在 {IMG_DIR} 找不到影像")
+if args.draw:
+    os.makedirs(os.path.join(args.out, "corners"), exist_ok=True)
+
 objp = np.zeros((1, CB[0]*CB[1], 3), np.float64)
 objp[0, :, :2] = np.mgrid[0:CB[0], 0:CB[1]].T.reshape(-1, 2)
 subpix = (cv2.TERM_CRITERIA_EPS+cv2.TERM_CRITERIA_MAX_ITER, 50, 1e-4)
@@ -29,9 +57,10 @@ for p in imgs:
     im = cv2.imread(p)
     if im is not None: img_shape = im.shape[:2][::-1]; break
 W, H = img_shape
+print(f"[{args.cam}] {len(imgs)} 張 @ {W}x{H},棋盤 {CB[0]}x{CB[1]}")
 
-# bootstrap 起點
-K0 = np.array([[282.0,0,644.9],[0,281.2,508.5],[0,0,1]], np.float64)
+# bootstrap 起點 —— 依解析度自動設:光心=影像中心、焦距猜值≈0.21*W(涵蓋一般魚眼)
+K0 = np.array([[0.21*W,0,W/2.0],[0,0.21*W,H/2.0],[0,0,1]], np.float64)
 D0 = np.array([[0.357],[-0.0526],[-0.1046],[0.0583]], np.float64)
 new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
     K0, D0, img_shape, np.eye(3), balance=1.0, new_size=(W,H))
@@ -45,7 +74,12 @@ for p in imgs:
     c = detect(g)
     if c is not None:
         op.append(objp.copy()); ip.append(c.reshape(1,-1,2).astype(np.float64))
-        names.append(name); continue
+        names.append(name)
+        if args.draw:
+            vis = img.copy()
+            cv2.drawChessboardCorners(vis, CB, c.reshape(-1,1,2).astype(np.float32), True)
+            cv2.imwrite(os.path.join(args.out, "corners", os.path.splitext(name)[0]+"_corners.jpg"), vis)
+        continue
     und = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
     cu = detect(cv2.cvtColor(und, cv2.COLOR_BGR2GRAY))
     if cu is not None:
@@ -55,7 +89,7 @@ for p in imgs:
         dist = cv2.fisheye.distortPoints(norm.reshape(1,-1,2), K0, D0).reshape(-1,2)
         op.append(objp.copy()); ip.append(dist.reshape(1,-1,2).astype(np.float64))
         names.append(name+"*")
-print(f"偵測到 {len(op)} 張: {names}\n")
+print(f"偵測到 {len(op)} 張\n")
 
 # 不用 CHECK_COND,改逐張剔高誤差
 flags = (cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW
@@ -90,15 +124,14 @@ while len(op2) >= 4:
         break
 
 fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
-sc = W/1920.0
 print(f"\n{'='*60}")
-print(f"  rear 魚眼內參 (用 {len(op2)} 張, RMS={rms:.4f}px)")
+print(f"  {args.cam} 魚眼內參 (用 {len(op2)} 張, RMS={rms:.4f}px)")
 print(f"{'='*60}")
 print(f"\n# K_base @ {W}x{H}")
 print(f"K_base = [{fx:.6f}, {fy:.6f}, {cx:.6f}, {cy:.6f}]")
-print(f"\n# K_base @ 1920x1536 native")
-print(f"K_base_native = [{fx/sc:.4f}, {fy/(H/1536.0):.4f}, {cx/sc:.4f}, {cy/(H/1536.0):.4f}]")
 print(f"\n# D [k1,k2,k3,k4]")
 print(f"D = [{D[0,0]:.8f}, {D[1,0]:.8f}, {D[2,0]:.8f}, {D[3,0]:.8f}]")
-print(f"\n# RMS = {rms:.4f} px,使用圖: {nm2}")
+print(f"\n# RMS = {rms:.4f} px,使用 {len(op2)}/{len(imgs)} 張")
+if args.draw:
+    print(f"# 角點偵測圖已存到: {os.path.join(args.out,'corners')}")
 print(f"{'='*60}")
